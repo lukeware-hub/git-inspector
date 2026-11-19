@@ -49,16 +49,16 @@ async function readCounts($: EngineInterface): Promise<StatusCounts> {
   return parseStatus(output)
 }
 
-// Reads the session's repository; fetches first when the branch tracks a remote one, so the pull count is current.
-export async function readGitStatus($: EngineInterface): Promise<GitStatus> {
+// Reads the session's repository; with shouldFetch, fetches first when the branch tracks a remote one, so the pull count is current.
+export async function readGitStatus($: EngineInterface, shouldFetch: boolean): Promise<GitStatus> {
   const [cwd, repo] = await Promise.all([$.session.cwd(), $.session.repo()])
   if (!repo) return { cwd, hasGit: false, staged: 0, unstaged: 0, untracked: 0, checkedAt: await $.clock.now() }
   const gitDir = (await git($, GIT_DIR))?.trim()
   let counts = await readCounts($)
-  let fetch: FetchResult = 'no upstream'
-  if (counts.upstream) {
-    fetch = (await git($, FETCH)) === undefined ? 'failed' : 'done'
-    if (fetch === 'done') counts = await readCounts($)
-  }
-  return { cwd, hasGit: true, root: repo.root, gitDir, ...counts, fetch, checkedAt: await $.clock.now() }
+  if (!counts.upstream) return { cwd, hasGit: true, root: repo.root, gitDir, ...counts, fetch: 'no upstream', checkedAt: await $.clock.now() }
+  if (!shouldFetch) return { cwd, hasGit: true, root: repo.root, gitDir, ...counts, checkedAt: await $.clock.now() }
+  const fetchedAt = await $.clock.now()
+  const fetch: FetchResult = (await git($, FETCH)) === undefined ? 'failed' : 'done'
+  if (fetch === 'done') counts = await readCounts($)
+  return { cwd, hasGit: true, root: repo.root, gitDir, ...counts, fetch, fetchedAt, checkedAt: await $.clock.now() }
 }

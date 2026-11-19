@@ -1,16 +1,17 @@
 import type { On } from 'claude-code'
 import { expect, mock, test, type TestBody } from 'claude-code/testing'
 
-import { PANE_ID, TOOL } from './register'
+import { PLUGIN, TOOL, orderRows } from './register'
+
+type Engine = Parameters<TestBody>[0]
 
 const ROOT = '/work/app'
 const CWD = '/work/app/web'
 
-const PANE = {
-  plugin: 'git-inspector',
-  component: 'Pane',
-  requestId: PANE_ID,
-  props: { title: 'Git', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+const BAND = {
+  plugin: PLUGIN,
+  component: 'AbovePrompt',
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 8, bodyColumns: 120, scroll: { offset: 0, bodyRows: 6 }, view: {} },
 } as const
 
 const BEFORE_FETCH = '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +1 -0\n1 M. N... a b c d e f.ts\n? new.md\n'
@@ -18,9 +19,11 @@ const AFTER_FETCH = BEFORE_FETCH.replace('-0', '-2')
 
 type Host = { isRepo: boolean; isFetchFailing?: boolean; status?: string }
 
+const complete = (turnId: string) => ({ answer: '', durationMs: 1000, isAborted: false, turnId, reason: 'answer' as const })
+
 // Stands for the engine: the session folder, its repository and the git commands' answers.
 function stubEngine(on: On, host: Host) {
-  mock.clock(on, { now: Date.UTC(2026, 10, 19, 17, 2, 11) })
+  const clock = mock.clock(on, { now: Date.UTC(2026, 10, 19, 17, 2, 11) })
   const ran: string[] = []
   let hasFetched = false
   on('session.cwd', () => ({ value: CWD }))
@@ -39,35 +42,48 @@ function stubEngine(on: On, host: Host) {
   })
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('tool.register', (_, e) => ({ value: { tool: `mcp__git-inspector__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  return { ran }
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  return { ran, clock }
 }
 
-async function runTool($: Parameters<TestBody>[0]) {
+async function bandLines($: Engine, surface: 'terminal' | 'desktop' = 'terminal', props: { bodyColumns?: number; maxRows?: number } = {}) {
+  const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, ...props }, surface })
+  const lines = (await band.findAll({ type: 'Text' })).map(found => found.text.trim())
+  await band.unmount()
+  return lines
+}
+
+// Background readings settle over a few event-loop turns; waits until the band shows no reading in progress.
+async function settled($: Engine): Promise<string[]> {
+  let lines: string[] = []
+  for (let tries = 0; tries < 30; tries++) {
+    lines = await bandLines($)
+    if (!lines.some(line => line === '○ reading' || line === '○ waiting')) return lines
+  }
+  return lines
+}
+
+async function start($: Engine) {
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  return settled($)
+}
+
+// The value painted right after a dim cell label, such as "pull" then "2".
+function cellAfter(lines: string[], label: string) {
+  return lines[lines.indexOf(label) + 1]
+}
+
+async function runTool($: Engine) {
   const answer = await $.tool.call({ tool: TOOL })
   return JSON.parse(String(answer.result))
 }
 
-// The value painted right after a dim cell label, such as "pull" then "2".
-async function cellAfter($: Parameters<TestBody>[0], surface: 'terminal' | 'desktop', label: string) {
-  const lines = await paneLines($, surface)
-  return lines[lines.indexOf(label) + 1]
-}
-
-async function paneLines($: Parameters<TestBody>[0], surface: 'terminal' | 'desktop' = 'terminal') {
-  const pane = await $.ui.mount({ ...PANE, surface })
-  const lines = (await pane.findAll({ type: 'Text' })).map(found => found.text.trim())
-  await pane.unmount()
-  return lines
-}
-
-test('the tool fetches, then answers the repository, branch and counts', async ($, on) => {
+test('the session start reads and fetches, and the tool answers the same data', async ($, on) => {
   const { ran } = stubEngine(on, { isRepo: true })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  const status = await runTool($)
+  await start($)
   expect(ran).toEqual(['git rev-parse', 'git status', 'git fetch', 'git status'])
-  expect(status).toMatchObject({
+  expect(await runTool($)).toMatchObject({
     cwd: CWD,
     hasGit: true,
     root: ROOT,
@@ -83,76 +99,103 @@ test('the tool fetches, then answers the repository, branch and counts', async (
   })
 })
 
-test('the pane shows what the tool read, on every surface', async ($, on) => {
+test('the band shows the repository, sync and changes, on every surface', async ($, on) => {
   stubEngine(on, { isRepo: true })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  await runTool($)
+  await start($)
   for (const surface of ['terminal', 'desktop'] as const) {
-    const lines = await paneLines($, surface)
-    for (const text of ['Git Inspector', 'main', 'remote origin/main', '● fetched', 'Repo', `${ROOT}, session in web`, 'found', 'Sync', 'diverged', 'Changes', 'Checked', 'at']) {
+    const lines = await bandLines($, surface)
+    for (const text of ['Git Inspector', 'main', 'remote origin/main', 'Repo', `${ROOT}, session in web`, '.git', 'found', 'Sync', 'diverged', 'Changes']) {
       expect(lines).toContain(text)
     }
-    expect(await cellAfter($, surface, 'pull')).toBe('2')
-    expect(await cellAfter($, surface, 'push')).toBe('1')
-    expect(await cellAfter($, surface, 'staged')).toBe('1')
-    expect(await cellAfter($, surface, 'changed')).toBe('0')
-    expect(await cellAfter($, surface, 'untracked')).toBe('1')
+    expect(lines.some(line => /^● fetched \d\d:\d\d$/.test(line))).toBe(true)
+    expect(cellAfter(lines, 'pull')).toBe('2')
+    expect(cellAfter(lines, 'push')).toBe('1')
+    expect(cellAfter(lines, 'staged')).toBe('1')
+    expect(cellAfter(lines, 'changed')).toBe('0')
+    expect(cellAfter(lines, 'untracked')).toBe('1')
   }
 })
 
-test('/git opens the pane and reads the repository', async ($, on) => {
+test('after a turn the band reads again, fetching only once five minutes have passed', async ($, on) => {
+  const { ran, clock } = stubEngine(on, { isRepo: true })
+  await start($)
+  ran.length = 0
+  await clock.advance(60_000)
+  await $.turn.complete(complete('t1'))
+  await settled($)
+  expect(ran).toEqual(['git rev-parse', 'git status'])
+  expect((await bandLines($)).some(line => /^● fetched/.test(line))).toBe(true)
+
+  ran.length = 0
+  await clock.advance(5 * 60_000)
+  await $.turn.complete(complete('t2'))
+  await settled($)
+  expect(ran).toContain('git fetch')
+})
+
+test('/git fetches now and refreshes the band', async ($, on) => {
   const { ran } = stubEngine(on, { isRepo: true })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  await start($)
+  ran.length = 0
   const answer = await $.command.run({ command: 'git', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
-  expect(answer.text).toBe('Git pane opened.')
-  // The reading runs beside the command; the pane fills in once it ends.
-  let lines: string[] = []
-  for (let tries = 0; tries < 20 && !lines.includes('main'); tries++) lines = await paneLines($)
-  expect(lines).toContain('main')
+  expect(answer.text).toBe('Fetching from remote and refreshing the Git band.')
+  await settled($)
   expect(ran).toContain('git fetch')
 })
 
 test('a failed fetch keeps the last pull count and says so', async ($, on) => {
   stubEngine(on, { isRepo: true, isFetchFailing: true })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  expect(await runTool($)).toMatchObject({ fetch: 'failed', toPull: 0, toPush: 1 })
-  const lines = await paneLines($)
-  expect(lines).toContain('● fetch failed')
+  const lines = await start($)
+  expect(lines.some(line => /^● fetch failed \d\d:\d\d$/.test(line))).toBe(true)
+  expect(lines).toContain('Fetch')
   expect(lines).toContain('failed, the pull count is from the last fetch')
+  expect(await runTool($)).toMatchObject({ fetch: 'failed', toPull: 0, toPush: 1 })
 })
 
 test('a branch with no remote branch skips the fetch', async ($, on) => {
   const { ran } = stubEngine(on, { isRepo: true, status: '# branch.oid abc\n# branch.head local\n' })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  expect(await runTool($)).toMatchObject({ branch: 'local', fetch: 'no upstream' })
+  const lines = await start($)
   expect(ran).not.toContain('git fetch')
-  const lines = await paneLines($)
   expect(lines).toContain('no remote branch, nothing to pull or push')
+  expect(lines.some(line => /^○ local only/.test(line))).toBe(true)
 })
 
 test('a detached HEAD shows its commit', async ($, on) => {
   stubEngine(on, { isRepo: true, status: '# branch.oid 4f9c2a1d8e7b\n# branch.head (detached)\n' })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  await runTool($)
-  expect(await paneLines($)).toContain('detached at 4f9c2a1')
+  expect(await start($)).toContain('detached at 4f9c2a1')
 })
 
 test('a folder outside git says the .git folder is not found', async ($, on) => {
   const { ran } = stubEngine(on, { isRepo: false })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  expect(await runTool($)).toMatchObject({ cwd: CWD, hasGit: false })
+  const lines = await start($)
   expect(ran).toEqual([])
-  const lines = await paneLines($)
   expect(lines).toContain('not found')
-  expect(lines).toContain('○ no repository')
+  expect(lines.some(line => /^○ no repository/.test(line))).toBe(true)
+  expect(await runTool($)).toMatchObject({ cwd: CWD, hasGit: false })
 })
 
-test('an 80-column pane keeps every column', async ($, on) => {
+test('an 80-column band keeps every column', async ($, on) => {
   stubEngine(on, { isRepo: true })
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-  await runTool($)
-  const pane = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 80 }, surface: 'terminal' })
-  const lines = (await pane.findAll({ type: 'Text' })).map(found => found.text.trim())
-  await pane.unmount()
-  for (const label of ['pull', 'push', 'state', 'staged', 'changed', 'untracked', '.git']) expect(lines).toContain(label)
+  await start($)
+  const lines = await bandLines($, 'terminal', { bodyColumns: 80 })
+  for (const label of ['pull', 'push', 'state', 'staged', 'changed', 'untracked']) expect(lines).toContain(label)
+})
+
+test('a band with under five rows of room drops the frame and keeps the rows', async ($, on) => {
+  stubEngine(on, { isRepo: true })
+  await start($)
+  const lines = await bandLines($, 'terminal', { maxRows: 3 })
+  expect(lines).not.toContain('Git Inspector')
+  expect(lines).toContain('Repo')
+  expect(lines).toContain('Changes')
+})
+
+test('the Git row moves right above the Session Inspector row', () => {
+  const row = (plugin: string) => ({ plugin })
+  expect(orderRows([row('bugs'), row('session-inspector'), row('git-inspector')]).map(one => one.plugin)).toEqual([
+    'bugs',
+    'git-inspector',
+    'session-inspector',
+  ])
+  expect(orderRows([row('git-inspector'), row('bugs')]).map(one => one.plugin)).toEqual(['git-inspector', 'bugs'])
 })

@@ -1,14 +1,14 @@
 import type { ThemeKey } from 'claude-code'
 
 import type { GitStatus, GitView } from '../types'
-import { gridLine, layoutGrid, type GridRow, type Segment, type Ui } from './grid'
+import { gridLine, layoutGrid, type GridRow, type Part, type Segment, type Ui } from './grid'
 
 const LABEL_WIDTH = 9
 const PATH_WIDTH = 70
 
-// Local time as HH:MM:SS.
+// Local time as HH:MM.
 export function clock(at: number): string {
-  return new Date(at).toTimeString().slice(0, 8)
+  return new Date(at).toTimeString().slice(0, 5)
 }
 
 // Long text keeps both ends: "C:/Users/…/workspace/app".
@@ -48,12 +48,17 @@ function syncRow(status: GitStatus): GridRow {
   return { label: 'Sync', cells: [count('pull', toPull, 'warning'), count('push', toPush, 'warning'), syncState(toPull, toPush)] }
 }
 
+// The ".git found" or ".git not found" mark after the folder.
+function gitMark(hasGit: boolean): Part[] {
+  return [{ text: '   ' }, { text: '.git ', dim: true }, hasGit ? { text: 'found', dim: true } : { text: 'not found', color: 'warning', bold: true }]
+}
+
 // The repository root, then the session folder inside it when the session is not at the root.
 function repoRow(status: GitStatus): GridRow {
   const root = status.root ?? status.cwd
   const folder = relativeFolder(root, status.cwd)
   const text = folder === '.' ? slashes(root) : `${slashes(root)}, session in ${folder}`
-  return { label: 'Repo', cells: [], span: { text: middle(text, PATH_WIDTH) } }
+  return { label: 'Repo', cells: [], span: { text: middle(text, PATH_WIDTH), more: gitMark(true) } }
 }
 
 // A failure gets a red row of its own, across the whole width.
@@ -64,47 +69,51 @@ function failureRow(view: GitView, status: GitStatus): GridRow | undefined {
 }
 
 // The rows under the title: short figures in aligned columns, messages across the row.
-export function paneRows(view: GitView): GridRow[] {
+export function bandRows(view: GitView): GridRow[] {
   const { status } = view
   if (!status) {
     if (view.error) return [{ label: 'Error', cells: [], span: { text: `could not read the repository: ${view.error}`, color: 'error' } }]
-    return [{ label: 'Repo', cells: [], span: { text: 'reading the repository and fetching from remote', dim: true } }]
+    return [{ label: 'Repo', cells: [], span: { text: 'reading the repository', dim: true } }]
   }
-  const at: Segment = { label: 'at', text: clock(status.checkedAt) }
-  if (!status.hasGit) {
-    return [
-      { label: 'Folder', cells: [], span: { text: middle(slashes(status.cwd), PATH_WIDTH) } },
-      { label: 'Checked', cells: [at, { label: '.git', text: 'not found', color: 'warning', bold: true }] },
-    ]
-  }
+  if (!status.hasGit) return [{ label: 'Folder', cells: [], span: { text: middle(slashes(status.cwd), PATH_WIDTH), more: gitMark(false) } }]
   return [
     repoRow(status),
     syncRow(status),
     { label: 'Changes', cells: [count('staged', status.staged), count('changed', status.unstaged), count('untracked', status.untracked)] },
     failureRow(view, status),
-    { label: 'Checked', cells: [at, { label: '.git', text: 'found', dim: true }] },
   ].filter((row): row is GridRow => row !== undefined)
 }
 
 type Mark = { text: string; color?: ThemeKey }
 
-// The title row's status: how the last fetch went, or that one runs now.
+// The title row's status: how the last fetch went and when, or that a reading runs now.
 export function fetchMark(view: GitView): Mark {
   const { status } = view
-  if (view.isRefreshing) return { text: '○ fetching' }
+  if (view.isRefreshing) return { text: '○ reading' }
   if (!status) return { text: view.error ? '● failed' : '○ waiting', color: view.error ? 'error' : undefined }
-  if (!status.hasGit) return { text: '○ no repository' }
-  if (status.fetch === 'done') return { text: '● fetched', color: 'success' }
-  if (status.fetch === 'failed') return { text: '● fetch failed', color: 'error' }
-  return { text: '○ local only' }
+  if (!status.hasGit) return { text: `○ no repository ${clock(status.checkedAt)}` }
+  const at = clock(status.fetchedAt ?? status.checkedAt)
+  if (status.fetch === 'done') return { text: `● fetched ${at}`, color: 'success' }
+  if (status.fetch === 'failed') return { text: `● fetch failed ${at}`, color: 'error' }
+  if (status.fetch === 'no upstream') return { text: `○ local only ${at}` }
+  return { text: `○ not fetched yet ${at}` }
 }
 
-// The whole pane: a framed band like Session Inspector's, title on the left, branch and fetch state on the right.
-export function gitPane(ui: Ui, view: GitView, columns: number) {
+// The frame and title need five rows of room; below that the rows stay bare.
+export function isFramed(maxRows: number): boolean {
+  return maxRows >= 5
+}
+
+// The band above the prompt: framed like Session Inspector's, title on the left, branch and fetch state on the right.
+export function gitBand(ui: Ui, view: GitView, columns: number, maxRows: number) {
   const { Box, Text } = ui
+  const framed = isFramed(maxRows)
+  const rows = bandRows(view).slice(0, framed ? maxRows - 3 : Math.max(1, maxRows))
+  const lines = layoutGrid(rows, columns - (framed ? 4 : 0), LABEL_WIDTH).map(parts => gridLine(ui, parts))
+  if (!framed) return <Box flexDirection="column">{lines}</Box>
+
   const { status } = view
   const mark = fetchMark(view)
-  const lines = layoutGrid(paneRows(view), columns - 4, LABEL_WIDTH).map(parts => gridLine(ui, parts))
   const branch = status?.hasGit ? (status.isDetached ? `detached at ${status.branch}` : status.branch) : undefined
   return (
     <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>

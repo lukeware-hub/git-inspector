@@ -18,11 +18,13 @@ export type GitStatus = {
   staged: number
   unstaged: number
   untracked: number
+  // How the last fetch went and when it ran; a reading without a fetch keeps the previous ones.
   fetch?: FetchResult
+  fetchedAt?: number
   checkedAt: number
 }
 
-// What the pane draws: the last reading, whether a new one runs, and the last failure.
+// What the band draws: the last reading, whether a new one runs, and the last failure.
 export type GitView = { status?: GitStatus; isRefreshing: boolean; error?: string }
 
 declare module 'claude-code' {

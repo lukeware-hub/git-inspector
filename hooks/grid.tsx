@@ -10,8 +10,8 @@ export type Part = { text: string; color?: ThemeKey; bold?: boolean; dim?: boole
 // One figure: an optional dim label, then its value.
 export type Segment = Part & { label?: string }
 
-// One row: its name, then one figure per column, or one message across the whole row.
-export type GridRow = { label: string; cells: Segment[]; span?: Segment }
+// One row: its name, then one figure per column, or one message across the whole row, with any parts after it.
+export type GridRow = { label: string; cells: Segment[]; span?: Segment & { more?: Part[] } }
 
 const MIN_GAP = 3
 
@@ -42,7 +42,11 @@ export function layoutGrid(rows: readonly GridRow[], columns: number, labelWidth
 
   return rows.map(row => {
     const line: Part[] = [{ text: row.label.padEnd(labelWidth), dim: true }]
-    if (row.span) return [...line, { ...row.span, text: fit(row.span.text, room) }]
+    if (row.span) {
+      const { more = [], ...span } = row.span
+      const moreWidth = more.reduce((sum, part) => sum + part.text.length, 0)
+      return [...line, { ...span, text: fit(span.text, room - moreWidth) }, ...more]
+    }
     const cells = row.cells.slice(0, keep)
     cells.forEach((cell, column) => {
       const label = labels[column] ?? 0
