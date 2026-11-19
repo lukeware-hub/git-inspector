@@ -1,0 +1,9 @@
+{
+  "name": "git-inspector",
+  "version": "0.1.0",
+  "description": "Shows the Git state of the session's repository: branch, commits to pull and push, and local changes ready to commit.",
+  "author": { "name": "lukeware-hub" },
+  "license": "MIT",
+  "keywords": ["git", "repository", "branch", "status"],
+  "types": "./types/index.d.ts"
+}

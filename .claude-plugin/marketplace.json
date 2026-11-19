@@ -1,0 +1,5 @@
+{
+  "name": "git-inspector",
+  "owner": { "name": "lukeware-hub" },
+  "plugins": [{ "name": "git-inspector", "source": "./" }]
+}
