@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { parseStatus } from './git'
-import { middle, relativeFolder } from './pane'
+import { middle, relativeFolder } from './band'
 
 const TRACKING = [
   '# branch.oid 4f9c2a1d8e7b6c5a4f3e2d1c0b9a8f7e6d5c4b3a',
