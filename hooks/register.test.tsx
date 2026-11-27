@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test, type TestBody } from 'claude-code/testing'
 
-import { PLUGIN, TOOL, orderRows } from './register'
+import { PLUGIN, TOOL, isSame, orderRows } from './register'
 
 type Engine = Parameters<TestBody>[0]
 
@@ -27,12 +27,14 @@ const complete = (turnId: string) => ({ answer: '', durationMs: 1000, isAborted:
 function stubEngine(on: On, host: Host) {
   const clock = mock.clock(on, { now: Date.UTC(2026, 10, 19, 17, 2, 11) })
   const ran: string[] = []
+  const envs: Record<string, string>[] = []
   let hasFetched = false
   on('session.cwd', () => ({ value: CWD }))
   on('session.repo', () => ({ value: host.isRepo ? { root: ROOT, remote: null, internal: false, name: 'app' } : null }))
   on('process.run', (_, e) => {
     const command = e.argv.slice(0, 2).join(' ')
     ran.push(command)
+    envs.push(e.init?.env ?? {})
     if (command === 'git fetch') hasFetched = !host.isFetchFailing
     const stdout: Record<string, string | undefined> = {
       'git rev-parse': `${ROOT}/.git\n`,
@@ -48,7 +50,7 @@ function stubEngine(on: On, host: Host) {
   on('tool.register', (_, e) => ({ value: { tool: `mcp__git-inspector__${e.name}` } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
-  return { ran, clock }
+  return { ran, clock, envs }
 }
 
 async function bandLines($: Engine, surface: 'terminal' | 'desktop' = 'terminal', props: { bodyColumns?: number; maxRows?: number } = {}) {
@@ -282,4 +284,25 @@ test('the Git row moves right above the Session Inspector row', () => {
     'session-inspector',
   ])
   expect(orderRows([row('git-inspector'), row('bugs')]).map(one => one.plugin)).toEqual(['git-inspector', 'bugs'])
+})
+
+test('git runs in English and without optional locks, so the diff reads and the index stays free', async ($, on) => {
+  const { envs } = stubEngine(on, { isRepo: true })
+  await start($)
+  expect(envs.length).toBeGreaterThan(0)
+  for (const env of envs) expect(env).toMatchObject({ LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' })
+})
+
+test('a file both staged and modified is one file to commit', async ($, on) => {
+  stubEngine(on, { isRepo: true, status: '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n1 MM N... a b c d e f.ts\n' })
+  const lines = await start($)
+  expect(lines).toContain('commit 1 file')
+})
+
+test('two equal readings are the same whatever order their keys come in', () => {
+  const base = { cwd: '/a', hasGit: true, staged: 0, unstaged: 0, untracked: 0, files: 0 }
+  const stored = { ...base, fetch: 'done' as const, fetchedAt: 5, checkedAt: 9 }
+  const next = { ...base, checkedAt: 19, fetch: 'done' as const, fetchedAt: 5 }
+  expect(isSame(stored, next)).toBe(true)
+  expect(isSame(stored, { ...next, staged: 1 })).toBe(false)
 })

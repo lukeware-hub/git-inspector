@@ -1,6 +1,6 @@
 {
   "name": "git-inspector",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A band above the prompt with the Git state of the session's repository: branch, commits to pull and push, the last commit, the diff since it, local changes ready to commit, and the next step.",
   "author": { "name": "lukeware-hub" },
   "license": "MIT",

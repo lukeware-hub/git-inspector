@@ -92,7 +92,7 @@ export function fitRows(rows: readonly GridRow[], limit: number): GridRow[] {
 
 // What to do next, in plain words: pull first, then commit, then push.
 export function nextStep(status: GitStatus): Segment {
-  const files = status.staged + status.unstaged + status.untracked
+  const files = status.files
   const toPull = status.upstream ? (status.toPull ?? 0) : 0
   const toPush = status.upstream ? (status.toPush ?? 0) : 0
   const steps: string[] = []

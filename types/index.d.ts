@@ -22,6 +22,8 @@ export type GitStatus = {
   staged: number
   unstaged: number
   untracked: number
+  // Distinct files with any change: a file both staged and modified counts once, unlike in staged plus unstaged.
+  files: number
   // Tracked changes since the last commit, staged or not (`git diff HEAD --shortstat`); new untracked files are not in it.
   diff?: DiffStat
   // The commit HEAD points at; undefined before the first commit.
