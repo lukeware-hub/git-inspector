@@ -132,16 +132,42 @@ test('after a turn the band reads again, fetching only once five minutes have pa
   await start($)
   ran.length = 0
   await clock.advance(60_000)
+  await settled($)
+  ran.length = 0
   await $.turn.complete(complete('t1'))
   await settled($)
   expect(ran).toEqual(LOCAL_READS)
   expect((await bandLines($)).some(line => /^● fetched/.test(line))).toBe(true)
 
+  // The timer's own readings fetch once the five minutes are up, with no turn at all.
   ran.length = 0
   await clock.advance(5 * 60_000)
-  await $.turn.complete(complete('t2'))
   await settled($)
   expect(ran).toContain('git fetch')
+})
+
+test('the band reads again every ten seconds with no answer, and fetches only every five minutes', async ($, on) => {
+  const { ran, clock } = stubEngine(on, { isRepo: true })
+  await start($)
+  ran.length = 0
+  await clock.advance(10_000)
+  await settled($)
+  expect(ran).toEqual(LOCAL_READS)
+
+  ran.length = 0
+  await clock.advance(5 * 60_000)
+  await settled($)
+  expect(ran).toContain('git fetch')
+})
+
+test('the timer shows a change made outside the session', async ($, on) => {
+  const host: Host = { isRepo: true, status: '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n' }
+  const { clock } = stubEngine(on, host)
+  expect(await start($)).toContain('nothing to do, all in sync')
+  host.status = '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -0\n'
+  await clock.advance(10_000)
+  const lines = await settled($)
+  expect(cellAfter(lines, 'to push')).toBe('2')
 })
 
 test('/git fetches now and refreshes the band', async ($, on) => {
