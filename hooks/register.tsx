@@ -14,7 +14,7 @@ const FETCH_EVERY_MS = 5 * 60_000
 const view = atom({ plugin: 'git-inspector', key: 'view' } as const, { isRefreshing: false } as GitView, { shape: 'view-2' })
 
 const DESCRIPTION =
-  "Reads the git repository the session runs in: its root and .git folder, the current branch, the remote branch it tracks, how many commits there are to pull (after a git fetch) and to push, and how many files are staged, changed but not staged, and untracked. hasGit is false when the session folder is not a git repository. Takes no input."
+  "Reads the git repository the session runs in: its root and .git folder, the current branch, the remote branch it tracks, how many commits there are to pull (after a git fetch) and to push, how many files are staged, changed but not staged, and untracked, the files and lines changed since the last commit (diff), and the last commit's short hash and subject (lastCommit). hasGit is false when the session folder is not a git repository. Takes no input."
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -85,7 +85,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    return gitBand($.ui.resolve(e), await read($, view), e.props.bodyColumns, e.props.maxRows)
+    return gitBand($.ui.resolve(e), await read($, view), e.props.bodyColumns, e.props.maxRows, e.surface)
   })
 
   on('ui.render', { component: 'AbovePromptList' }, ($, e, next) => next({ ...e, props: { ...e.props, rows: orderRows(e.props.rows) } }))

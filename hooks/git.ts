@@ -1,10 +1,12 @@
 import type { EngineInterface } from 'claude-code'
 
-import type { FetchResult, GitStatus } from '../types'
+import type { DiffStat, FetchResult, GitStatus, LastCommit } from '../types'
 
 const STATUS = ['git', 'status', '--porcelain=v2', '--branch']
 const FETCH = ['git', 'fetch', '--quiet']
 const GIT_DIR = ['git', 'rev-parse', '--absolute-git-dir']
+const DIFF = ['git', 'diff', 'HEAD', '--shortstat']
+const LAST_COMMIT = ['git', 'log', '-1', '--format=%h%x00%s']
 const TIMEOUT_MS = 20_000
 // Git never stops to ask for a password: a fetch that needs one fails instead.
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' }
@@ -33,6 +35,18 @@ export function parseStatus(output: string): StatusCounts {
   return counts
 }
 
+// Reads `git diff --shortstat`: " 3 files changed, 12 insertions(+), 4 deletions(-)"; an empty answer is no change.
+export function parseShortstat(output: string): DiffStat {
+  const number = (pattern: RegExp) => Number(output.match(pattern)?.[1] ?? 0)
+  return { files: number(/(\d+) files? changed/), added: number(/(\d+) insertions?\(\+\)/), removed: number(/(\d+) deletions?\(-\)/) }
+}
+
+// Reads `git log -1 --format=%h%x00%s`: the short hash, a NUL, then the subject line.
+export function parseLastCommit(output: string): LastCommit | undefined {
+  const [hash = '', subject = ''] = output.trim().split('\0')
+  return hash ? { hash, subject } : undefined
+}
+
 // Runs a git command in the session's folder; undefined when it fails or times out.
 async function git($: EngineInterface, argv: readonly string[]): Promise<string | undefined> {
   try {
@@ -53,12 +67,14 @@ async function readCounts($: EngineInterface): Promise<StatusCounts> {
 export async function readGitStatus($: EngineInterface, shouldFetch: boolean): Promise<GitStatus> {
   const [cwd, repo] = await Promise.all([$.session.cwd(), $.session.repo()])
   if (!repo) return { cwd, hasGit: false, staged: 0, unstaged: 0, untracked: 0, checkedAt: await $.clock.now() }
-  const gitDir = (await git($, GIT_DIR))?.trim()
+  // Before the first commit there is no HEAD: both answers are then undefined.
+  const [gitDir, diff, last] = await Promise.all([git($, GIT_DIR), git($, DIFF), git($, LAST_COMMIT)])
+  const local = { cwd, hasGit: true, root: repo.root, gitDir: gitDir?.trim(), diff: diff === undefined ? undefined : parseShortstat(diff), lastCommit: last === undefined ? undefined : parseLastCommit(last) }
   let counts = await readCounts($)
-  if (!counts.upstream) return { cwd, hasGit: true, root: repo.root, gitDir, ...counts, fetch: 'no upstream', checkedAt: await $.clock.now() }
-  if (!shouldFetch) return { cwd, hasGit: true, root: repo.root, gitDir, ...counts, checkedAt: await $.clock.now() }
+  if (!counts.upstream) return { ...local, ...counts, fetch: 'no upstream', checkedAt: await $.clock.now() }
+  if (!shouldFetch) return { ...local, ...counts, checkedAt: await $.clock.now() }
   const fetchedAt = await $.clock.now()
   const fetch: FetchResult = (await git($, FETCH)) === undefined ? 'failed' : 'done'
   if (fetch === 'done') counts = await readCounts($)
-  return { cwd, hasGit: true, root: repo.root, gitDir, ...counts, fetch, fetchedAt, checkedAt: await $.clock.now() }
+  return { ...local, ...counts, fetch, fetchedAt, checkedAt: await $.clock.now() }
 }
