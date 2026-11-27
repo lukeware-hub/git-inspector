@@ -27,11 +27,12 @@ test('a tracking branch reads its sync counts and every kind of local change', (
     staged: 3,
     unstaged: 3,
     untracked: 2,
+    files: 7,
   })
 })
 
 test('a branch with no remote branch has no sync counts', () => {
-  expect(parseStatus('# branch.oid abc\r\n# branch.head feature/x\r\n')).toEqual({ branch: 'feature/x', staged: 0, unstaged: 0, untracked: 0 })
+  expect(parseStatus('# branch.oid abc\r\n# branch.head feature/x\r\n')).toEqual({ branch: 'feature/x', staged: 0, unstaged: 0, untracked: 0, files: 0 })
 })
 
 test('a detached HEAD reads as the short commit', () => {
@@ -41,6 +42,7 @@ test('a detached HEAD reads as the short commit', () => {
     staged: 0,
     unstaged: 0,
     untracked: 0,
+    files: 0,
   })
 })
 
@@ -55,6 +57,10 @@ test('the diff stat reads files, added and removed lines, in singular and plural
   expect(parseShortstat(' 1 file changed, 1 insertion(+)\n')).toEqual({ files: 1, added: 1, removed: 0 })
   expect(parseShortstat(' 2 files changed, 7 deletions(-)\n')).toEqual({ files: 2, added: 0, removed: 7 })
   expect(parseShortstat('')).toEqual({ files: 0, added: 0, removed: 0 })
+})
+
+test('a file both staged and modified counts once as a changed file', () => {
+  expect(parseStatus('# branch.head main\n1 MM N... 100644 100644 100644 aaa bbb src/both.ts\n')).toMatchObject({ staged: 1, unstaged: 1, files: 1 })
 })
 
 test('the last commit reads its short hash and subject', () => {

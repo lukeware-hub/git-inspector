@@ -22,23 +22,31 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-let isReading = false
+// Readings in flight; a background reading waits while any runs.
+let readings = 0
+
+// The same value with every object's keys in one order, so two equal readings compare equal as text.
+function canonical(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([key, inner]) => [key, canonical(inner)]))
+}
 
 // The band shows the fetch time when there is one, so then a newer check time alone is no change worth a redraw.
-function isSame(a: GitStatus | undefined, b: GitStatus): boolean {
+export function isSame(a: GitStatus | undefined, b: GitStatus): boolean {
   if (!a) return false
-  const key = (status: GitStatus) => JSON.stringify(status.fetchedAt === undefined ? status : { ...status, checkedAt: 0 })
+  const key = (status: GitStatus) => JSON.stringify(canonical(status.fetchedAt === undefined ? status : { ...status, checkedAt: 0 }))
   return key(a) === key(b)
 }
 
 // Reads the repository again for the band; fetches when asked to or when the last fetch is five minutes old.
 // A quiet reading (the timer's) does not flash "reading" and does not redraw when nothing changed.
 async function refresh($: EngineInterface, isForced: boolean, isQuiet = false): Promise<GitStatus> {
-  const previous = (await read($, view)).status
-  const shouldFetch = isForced || (await $.clock.now()) - (previous?.fetchedAt ?? 0) >= FETCH_EVERY_MS
-  isReading = true
-  if (!isQuiet || shouldFetch) await update($, view, current => ({ ...current, isRefreshing: true }))
+  // Counted before the first await, so a second reading started in the same tick already sees this one.
+  readings++
   try {
+    const previous = (await read($, view)).status
+    const shouldFetch = isForced || (await $.clock.now()) - (previous?.fetchedAt ?? 0) >= FETCH_EVERY_MS
+    if (!isQuiet || shouldFetch) await update($, view, current => ({ ...current, isRefreshing: true }))
     const reading = await readGitStatus($, shouldFetch)
     // A reading without a fetch keeps how the last fetch went.
     const status = reading.fetch ? reading : { ...reading, fetch: previous?.fetch, fetchedAt: previous?.fetchedAt }
@@ -50,13 +58,13 @@ async function refresh($: EngineInterface, isForced: boolean, isQuiet = false): 
     await update($, view, current => ({ ...current, isRefreshing: false, error: message(error) }))
     throw error
   } finally {
-    isReading = false
+    readings--
   }
 }
 
 // Background readings never overlap and never break an event.
 function refreshInBackground($: EngineInterface, isForced = false, isQuiet = false): void {
-  if (isReading && !isForced) return
+  if (readings > 0 && !isForced) return
   refresh($, isForced, isQuiet).catch(() => undefined)
 }
 

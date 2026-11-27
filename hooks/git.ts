@@ -8,14 +8,16 @@ const GIT_DIR = ['git', 'rev-parse', '--absolute-git-dir']
 const DIFF = ['git', 'diff', 'HEAD', '--shortstat']
 const LAST_COMMIT = ['git', 'log', '-1', '--format=%h%x00%s']
 const TIMEOUT_MS = 20_000
-// Git never stops to ask for a password: a fetch that needs one fails instead.
-const NO_PROMPT = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' }
+// Git never stops to ask for a password: a fetch that needs one fails instead. LC_ALL=C keeps the shortstat text in
+// English whatever the user's language, so parseShortstat can read it. GIT_OPTIONAL_LOCKS=0 keeps `git status` from
+// taking index.lock to refresh the index, which would break the user's own `git add` or `git commit` run at the same time.
+const GIT_ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' }
 
-export type StatusCounts = Pick<GitStatus, 'branch' | 'isDetached' | 'upstream' | 'toPull' | 'toPush' | 'staged' | 'unstaged' | 'untracked'>
+export type StatusCounts = Pick<GitStatus, 'branch' | 'isDetached' | 'upstream' | 'toPull' | 'toPush' | 'staged' | 'unstaged' | 'untracked' | 'files'>
 
 // Reads `git status --porcelain=v2 --branch`: branch, remote branch, commits ahead and behind, and file counts.
 export function parseStatus(output: string): StatusCounts {
-  const counts: StatusCounts = { staged: 0, unstaged: 0, untracked: 0 }
+  const counts: StatusCounts = { staged: 0, unstaged: 0, untracked: 0, files: 0 }
   let commit = ''
   for (const line of output.split(/\r?\n/)) {
     const [kind, key = '', ...rest] = line.split(' ')
@@ -28,8 +30,14 @@ export function parseStatus(output: string): StatusCounts {
     } else if (kind === '1' || kind === '2') {
       if (key[0] !== '.') counts.staged++
       if (key[1] !== '.') counts.unstaged++
-    } else if (kind === 'u') counts.unstaged++
-    else if (kind === '?') counts.untracked++
+      counts.files++
+    } else if (kind === 'u') {
+      counts.unstaged++
+      counts.files++
+    } else if (kind === '?') {
+      counts.untracked++
+      counts.files++
+    }
   }
   if (counts.branch === '(detached)') return { ...counts, branch: commit.slice(0, 7), isDetached: true }
   return counts
@@ -50,7 +58,7 @@ export function parseLastCommit(output: string): LastCommit | undefined {
 // Runs a git command in the session's folder; undefined when it fails or times out.
 async function git($: EngineInterface, argv: readonly string[]): Promise<string | undefined> {
   try {
-    const done = await $.process.run(argv, { env: NO_PROMPT, timeoutMs: TIMEOUT_MS })
+    const done = await $.process.run(argv, { env: GIT_ENV, timeoutMs: TIMEOUT_MS })
     return done.exitCode === 0 ? done.stdout : undefined
   } catch {
     return undefined
@@ -66,7 +74,7 @@ async function readCounts($: EngineInterface): Promise<StatusCounts> {
 // Reads the session's repository; with shouldFetch, fetches first when the branch tracks a remote one, so the pull count is current.
 export async function readGitStatus($: EngineInterface, shouldFetch: boolean): Promise<GitStatus> {
   const [cwd, repo] = await Promise.all([$.session.cwd(), $.session.repo()])
-  if (!repo) return { cwd, hasGit: false, staged: 0, unstaged: 0, untracked: 0, checkedAt: await $.clock.now() }
+  if (!repo) return { cwd, hasGit: false, staged: 0, unstaged: 0, untracked: 0, files: 0, checkedAt: await $.clock.now() }
   // Before the first commit there is no HEAD: both answers are then undefined.
   const [gitDir, diff, last] = await Promise.all([git($, GIT_DIR), git($, DIFF), git($, LAST_COMMIT)])
   const local = { cwd, hasGit: true, root: repo.root, gitDir: gitDir?.trim(), diff: diff === undefined ? undefined : parseShortstat(diff), lastCommit: last === undefined ? undefined : parseLastCommit(last) }
