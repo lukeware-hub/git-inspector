@@ -10,6 +10,8 @@ export const TOOL = 'mcp__git-inspector__git_status'
 // The band sits right above this mod's band.
 const ANCHOR = 'session-inspector'
 const FETCH_EVERY_MS = 5 * 60_000
+// How often the band reads the repository on its own, with no answer needed; the fetch keeps its own five minutes.
+const POLL_EVERY_MS = 10_000
 
 const view = atom({ plugin: 'git-inspector', key: 'view' } as const, { isRefreshing: false } as GitView, { shape: 'view-2' })
 
@@ -22,17 +24,27 @@ function message(error: unknown): string {
 
 let isReading = false
 
+// The band shows the fetch time when there is one, so then a newer check time alone is no change worth a redraw.
+function isSame(a: GitStatus | undefined, b: GitStatus): boolean {
+  if (!a) return false
+  const key = (status: GitStatus) => JSON.stringify(status.fetchedAt === undefined ? status : { ...status, checkedAt: 0 })
+  return key(a) === key(b)
+}
+
 // Reads the repository again for the band; fetches when asked to or when the last fetch is five minutes old.
-async function refresh($: EngineInterface, isForced: boolean): Promise<GitStatus> {
+// A quiet reading (the timer's) does not flash "reading" and does not redraw when nothing changed.
+async function refresh($: EngineInterface, isForced: boolean, isQuiet = false): Promise<GitStatus> {
   const previous = (await read($, view)).status
   const shouldFetch = isForced || (await $.clock.now()) - (previous?.fetchedAt ?? 0) >= FETCH_EVERY_MS
   isReading = true
-  await update($, view, current => ({ ...current, isRefreshing: true }))
+  if (!isQuiet || shouldFetch) await update($, view, current => ({ ...current, isRefreshing: true }))
   try {
     const reading = await readGitStatus($, shouldFetch)
     // A reading without a fetch keeps how the last fetch went.
     const status = reading.fetch ? reading : { ...reading, fetch: previous?.fetch, fetchedAt: previous?.fetchedAt }
-    await update($, view, () => ({ status, isRefreshing: false }))
+    const current = await read($, view)
+    const isUnchanged = isQuiet && !current.isRefreshing && !current.error && isSame(current.status, status)
+    if (!isUnchanged) await update($, view, () => ({ status, isRefreshing: false }))
     return status
   } catch (error) {
     await update($, view, current => ({ ...current, isRefreshing: false, error: message(error) }))
@@ -43,9 +55,9 @@ async function refresh($: EngineInterface, isForced: boolean): Promise<GitStatus
 }
 
 // Background readings never overlap and never break an event.
-function refreshInBackground($: EngineInterface, isForced = false): void {
+function refreshInBackground($: EngineInterface, isForced = false, isQuiet = false): void {
   if (isReading && !isForced) return
-  refresh($, isForced).catch(() => undefined)
+  refresh($, isForced, isQuiet).catch(() => undefined)
 }
 
 // Moves this mod's row right above the anchor's; the other rows keep their order.
@@ -62,6 +74,8 @@ export const register: Register = on => {
     await $.command.register({ name: 'git', description: 'Fetch from remote now and refresh the Git band above the prompt' })
     await $.tool.register({ name: 'git_status', description: DESCRIPTION, inputSchema: { type: 'object', properties: {} } })
     refreshInBackground($)
+    // Keeps the band current with no answer needed; the engine stops the timer when the module unloads.
+    $.clock.every(POLL_EVERY_MS, () => refreshInBackground($, false, true))
     return next(e)
   }).catch(($, e, next) => next(e))
 

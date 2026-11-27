@@ -27,7 +27,7 @@ It answers at a glance: which repository the session points at, whether it has a
   ╰────────────────────────────────────────────────────────────────────────────────╯
   ```
 
-  It reads the repository when the session starts and after each answer. It runs `git fetch` at most once every five minutes, so the band never waits on the network.
+  It reads the repository when the session starts, after each answer, and every 10 seconds on its own, so changes made outside the session show up without a prompt. It runs `git fetch` at most once every five minutes, so the band never waits on the network.
 - **The `/git` command** fetches from the remote now and refreshes the band.
 - **The `git_status` tool** gives the agent the same data as JSON, after a fresh fetch, so you can ask Claude "what is the git state?" and it reads it itself.
 
