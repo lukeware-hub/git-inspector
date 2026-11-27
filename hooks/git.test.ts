@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { parseStatus } from './git'
+import { parseLastCommit, parseShortstat, parseStatus } from './git'
 import { middle, relativeFolder } from './band'
 
 const TRACKING = [
@@ -48,6 +48,18 @@ test('the session folder reads relative to the repository root', () => {
   expect(relativeFolder('C:\\work\\app', 'C:\\work\\app')).toBe('.')
   expect(relativeFolder('C:\\work\\app', 'c:\\work\\app\\web\\src')).toBe('web/src')
   expect(relativeFolder('/work/app', '/work/other')).toBe('/work/other')
+})
+
+test('the diff stat reads files, added and removed lines, in singular and plural', () => {
+  expect(parseShortstat(' 3 files changed, 12 insertions(+), 4 deletions(-)\n')).toEqual({ files: 3, added: 12, removed: 4 })
+  expect(parseShortstat(' 1 file changed, 1 insertion(+)\n')).toEqual({ files: 1, added: 1, removed: 0 })
+  expect(parseShortstat(' 2 files changed, 7 deletions(-)\n')).toEqual({ files: 2, added: 0, removed: 7 })
+  expect(parseShortstat('')).toEqual({ files: 0, added: 0, removed: 0 })
+})
+
+test('the last commit reads its short hash and subject', () => {
+  expect(parseLastCommit('3fa92b1\0fix bug #21\n')).toEqual({ hash: '3fa92b1', subject: 'fix bug #21' })
+  expect(parseLastCommit('')).toBeUndefined()
 })
 
 test('long paths keep both ends', () => {

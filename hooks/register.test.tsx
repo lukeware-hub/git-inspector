@@ -17,7 +17,9 @@ const BAND = {
 const BEFORE_FETCH = '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +1 -0\n1 M. N... a b c d e f.ts\n? new.md\n'
 const AFTER_FETCH = BEFORE_FETCH.replace('-0', '-2')
 
-type Host = { isRepo: boolean; isFetchFailing?: boolean; status?: string }
+type Host = { isRepo: boolean; isFetchFailing?: boolean; status?: string; diff?: string; log?: string }
+
+const LOCAL_READS = ['git rev-parse', 'git diff', 'git log', 'git status']
 
 const complete = (turnId: string) => ({ answer: '', durationMs: 1000, isAborted: false, turnId, reason: 'answer' as const })
 
@@ -34,6 +36,8 @@ function stubEngine(on: On, host: Host) {
     if (command === 'git fetch') hasFetched = !host.isFetchFailing
     const stdout: Record<string, string | undefined> = {
       'git rev-parse': `${ROOT}/.git\n`,
+      'git diff': host.diff ?? ' 3 files changed, 12 insertions(+), 4 deletions(-)\n',
+      'git log': host.log ?? '3fa92b1\0fix bug #21\n',
       'git status': host.status ?? (hasFetched ? AFTER_FETCH : BEFORE_FETCH),
       'git fetch': host.isFetchFailing ? undefined : '',
     }
@@ -82,7 +86,7 @@ async function runTool($: Engine) {
 test('the session start reads and fetches, and the tool answers the same data', async ($, on) => {
   const { ran } = stubEngine(on, { isRepo: true })
   await start($)
-  expect(ran).toEqual(['git rev-parse', 'git status', 'git fetch', 'git status'])
+  expect(ran).toEqual([...LOCAL_READS, 'git fetch', 'git status'])
   expect(await runTool($)).toMatchObject({
     cwd: CWD,
     hasGit: true,
@@ -96,23 +100,30 @@ test('the session start reads and fetches, and the tool answers the same data', 
     unstaged: 0,
     untracked: 1,
     fetch: 'done',
+    diff: { files: 3, added: 12, removed: 4 },
+    lastCommit: { hash: '3fa92b1', subject: 'fix bug #21' },
   })
 })
 
-test('the band shows the repository, sync and changes, on every surface', async ($, on) => {
+test('the band shows the repository, sync, last commit, diff and changes, on every surface', async ($, on) => {
   stubEngine(on, { isRepo: true })
   await start($)
   for (const surface of ['terminal', 'desktop'] as const) {
-    const lines = await bandLines($, surface)
-    for (const text of ['Git Inspector', 'main', 'remote origin/main', 'Repo', `${ROOT}, session in web`, '.git', 'found', 'Sync', 'diverged', 'Changes']) {
+    const lines = await bandLines($, surface, { maxRows: 16 })
+    for (const text of ['Git Inspector', 'main', 'remote origin/main', 'Repo', 'app', ROOT, ', session in web', 'Sync', 'diverged', 'Changes', 'Next']) {
       expect(lines).toContain(text)
     }
+    expect(lines).toContain('pull 2 commits, commit 2 files, then push')
+    expect(lines).not.toContain('found')
     expect(lines.some(line => /^● fetched \d\d:\d\d$/.test(line))).toBe(true)
-    expect(cellAfter(lines, 'pull')).toBe('2')
-    expect(cellAfter(lines, 'push')).toBe('1')
+    expect(cellAfter(lines, 'to pull')).toBe('2')
+    expect(cellAfter(lines, 'to push')).toBe('1')
     expect(cellAfter(lines, 'staged')).toBe('1')
-    expect(cellAfter(lines, 'changed')).toBe('0')
-    expect(cellAfter(lines, 'untracked')).toBe('1')
+    expect(cellAfter(lines, 'modified')).toBe('0')
+    expect(cellAfter(lines, 'new files')).toBe('1')
+    for (const text of ['Commit', 'last:', '3fa92b1', '"fix bug #21"', 'Diff', '−4']) expect(lines).toContain(text)
+    expect(cellAfter(lines, 'files')).toBe('3')
+    expect(cellAfter(lines, 'lines')).toBe('+12')
   }
 })
 
@@ -123,7 +134,7 @@ test('after a turn the band reads again, fetching only once five minutes have pa
   await clock.advance(60_000)
   await $.turn.complete(complete('t1'))
   await settled($)
-  expect(ran).toEqual(['git rev-parse', 'git status'])
+  expect(ran).toEqual(LOCAL_READS)
   expect((await bandLines($)).some(line => /^● fetched/.test(line))).toBe(true)
 
   ran.length = 0
@@ -178,7 +189,43 @@ test('an 80-column band keeps every column', async ($, on) => {
   stubEngine(on, { isRepo: true })
   await start($)
   const lines = await bandLines($, 'terminal', { bodyColumns: 80 })
-  for (const label of ['pull', 'push', 'state', 'staged', 'changed', 'untracked']) expect(lines).toContain(label)
+  for (const label of ['to pull', 'to push', 'status', 'staged', 'modified', 'new files']) expect(lines).toContain(label)
+})
+
+test('a terminal band with the height for it draws one bordered table, like Session Inspector', async ($, on) => {
+  stubEngine(on, { isRepo: true })
+  await start($)
+  const lines = await bandLines($, 'terminal', { maxRows: 12 })
+  expect(lines.some(line => /^╭─+╮$/.test(line))).toBe(true)
+  expect(lines.some(line => /^╰─+╯$/.test(line))).toBe(true)
+  expect(lines.some(line => /^├─+┬.*┤$/.test(line))).toBe(true)
+  for (const text of ['Repo', 'Sync', 'Changes', 'Next', 'to pull', 'new files']) expect(lines).toContain(text)
+})
+
+test('a table short of room leaves out Commit and Diff before any other row', async ($, on) => {
+  stubEngine(on, { isRepo: true })
+  await start($)
+  const full = await bandLines($, 'terminal', { maxRows: 16 })
+  expect(full).toContain('Commit')
+  expect(full).toContain('Diff')
+  const short = await bandLines($, 'terminal', { maxRows: 12 })
+  expect(short.some(line => /^╭─+╮$/.test(line))).toBe(true)
+  expect(short).not.toContain('Commit')
+  expect(short).not.toContain('Diff')
+  expect(short).toContain('Next')
+})
+
+test('a repository with no commits and no changes says so', async ($, on) => {
+  stubEngine(on, { isRepo: true, diff: '', log: '' })
+  await start($)
+  const after = await bandLines($, 'terminal', { maxRows: 16 })
+  expect(after).toContain('no commits yet')
+  expect(cellAfter(after, 'files')).toBe('0')
+})
+
+test('a branch already in sync says there is nothing to do', async ($, on) => {
+  stubEngine(on, { isRepo: true, status: '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n' })
+  expect(await start($)).toContain('nothing to do, all in sync')
 })
 
 test('a band with under five rows of room drops the frame and keeps the rows', async ($, on) => {

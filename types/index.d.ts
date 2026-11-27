@@ -1,6 +1,10 @@
 // What git-inspector reads from the session's repository.
 export type FetchResult = 'done' | 'failed' | 'no upstream'
 
+export type DiffStat = { files: number; added: number; removed: number }
+
+export type LastCommit = { hash: string; subject: string }
+
 export type GitStatus = {
   // The folder the session runs in.
   cwd: string
@@ -18,6 +22,10 @@ export type GitStatus = {
   staged: number
   unstaged: number
   untracked: number
+  // Tracked changes since the last commit, staged or not (`git diff HEAD --shortstat`); new untracked files are not in it.
+  diff?: DiffStat
+  // The commit HEAD points at; undefined before the first commit.
+  lastCommit?: LastCommit
   // How the last fetch went and when it ran; a reading without a fetch keeps the previous ones.
   fetch?: FetchResult
   fetchedAt?: number
