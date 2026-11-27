@@ -197,6 +197,18 @@ function card(ui: Ui, cell: Segment | undefined, width: number | string) {
   )
 }
 
+// A message row as one card across the whole width, bordered like the figure cards; a watch or danger message colors the border.
+function spanCard(ui: Ui, span: Segment) {
+  const { Box } = ui
+  const isAlert = span.color === 'warning' || span.color === 'error'
+  return (
+    <Box width="100%" flexShrink={0} flexDirection="row" borderStyle="round" borderColor={isAlert ? span.color : undefined} paddingX={1} paddingY={0} overflow="hidden">
+      {paint(ui, span)}
+      {(span.more ?? []).map(part => paint(ui, part))}
+    </Box>
+  )
+}
+
 // The band as rows of cards packed edge to edge: a narrow dim label column, then the figures in a grid whose columns
 // line up in every row (empty slots hold the place), wrapping to fewer columns as the room shrinks.
 export function cardRows(ui: Ui, rows: readonly GridRow[], columns: number, labelWidth: number) {
@@ -219,16 +231,7 @@ export function cardRows(ui: Ui, rows: readonly GridRow[], columns: number, labe
         </Box>
         <Box flexDirection="row" flexWrap="wrap" flexGrow={1} flexShrink={1} gap={0} columnGap={0} rowGap={0}>
           {row.span ? (
-            <Box flexDirection="row" flexWrap="wrap">
-              <Text color={row.span.color} bold={row.span.bold} dimColor={row.span.dim} wrap="wrap">
-                {row.span.text}
-              </Text>
-              {(row.span.more ?? []).map(part => (
-                <Text color={part.color} bold={part.bold} dimColor={part.dim} wrap="wrap">
-                  {part.text}
-                </Text>
-              ))}
-            </Box>
+            spanCard(ui, row.span)
           ) : (
             Array.from({ length: padded }, (_, index) => card(ui, cells[index], width))
           )}

@@ -223,6 +223,17 @@ test('a repository with no commits and no changes says so', async ($, on) => {
   expect(cellAfter(after, 'files')).toBe('0')
 })
 
+test('on the desktop every row, a message row too, sits in a bordered card', async ($, on) => {
+  stubEngine(on, { isRepo: false })
+  await start($)
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const boxes = await band.findAll({ type: 'Box' })
+  const bordered = boxes.filter(found => (found.props as { borderStyle?: string }).borderStyle === 'round')
+  await band.unmount()
+  // The frame, then the Folder card.
+  expect(bordered.length).toBe(2)
+})
+
 test('a branch already in sync says there is nothing to do', async ($, on) => {
   stubEngine(on, { isRepo: true, status: '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n' })
   expect(await start($)).toContain('nothing to do, all in sync')
